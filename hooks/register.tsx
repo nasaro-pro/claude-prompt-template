@@ -466,13 +466,16 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" rowGap={0}>
         {at > 0 && (
-          <Box flexDirection="column" paddingX={1} marginBottom={1}>
+          <Box flexDirection="column" rowGap={1} paddingX={1} marginBottom={1}>
             {tpl.fields.slice(0, at).map((f, i) => (
+              // 버튼마다 제 상자에 담아 테두리끼리 겹치지 않게 쌓는다
               // 누르거나 입력칸에서 ↑ → Enter로 그 칸을 다시 고친다
-              <Button key={`done-${i}`} onPress={() => goStep($, tpl, i)}>
-                <Text bold>{f.title}</Text>
-                {`   ${(values[i] ?? '').trim().replace(/\n+/g, ' ⏎ ') || EMPTY_VALUE}`}
-              </Button>
+              <Box key={`done-row-${i}`} flexDirection="row" flexShrink={0}>
+                <Button key={`done-${i}`} onPress={() => goStep($, tpl, i)}>
+                  <Text bold>{f.title}</Text>
+                  {`   ${(values[i] ?? '').trim().replace(/\n+/g, ' ⏎ ') || EMPTY_VALUE}`}
+                </Button>
+              </Box>
             ))}
           </Box>
         )}

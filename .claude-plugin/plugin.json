@@ -1,6 +1,6 @@
 {
   "name": "prompt-template",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": { "name": "user" },
   "description": "입력창 위에 단계별 프롬프트 템플릿을 띄우고, 완성된 글을 입력창에 채웁니다 (/template, /pt)",
   "types": "./types/index.d.ts"
