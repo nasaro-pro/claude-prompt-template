@@ -1,0 +1,6 @@
+{
+  "name": "claude-prompt-template",
+  "owner": { "name": "nasaro-pro" },
+  "description": "Claude Code 입력창 위에 단계별 프롬프트 템플릿을 띄우는 mod",
+  "plugins": [{ "name": "prompt-template", "source": "./" }]
+}
