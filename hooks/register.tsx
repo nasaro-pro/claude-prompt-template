@@ -11,8 +11,8 @@ const STORE_KEY = 'templates5'
 // 예전 저장본: 직접 만든 템플릿만 옮겨 온다 (새 것부터)
 const OLD_STORE_KEYS = ['templates4', 'templates3', 'templates2', 'templates']
 
-// 새 대화는 펼친 상태로 시작한다 (대화별 값)
-const isOpen = atom({ plugin: 'prompt-template', key: 'isOpen' } as const, true)
+// 새 대화는 접힌 한 줄로 시작하고, 그 줄을 누르면 펼쳐진다 (대화별 값)
+const isOpen = atom({ plugin: 'prompt-template', key: 'isOpen' } as const, false)
 const mode = atom({ plugin: 'prompt-template', key: 'mode' } as const, 'fill' as Mode)
 const step = atom({ plugin: 'prompt-template', key: 'step' } as const, 0)
 const reached = atom({ plugin: 'prompt-template', key: 'reached' } as const, 0)
@@ -40,6 +40,31 @@ const buildPrompt = (tpl: Template, values: string[]) =>
   tpl.fields.map((field, i) => `## ${field.title}\n${(values[i] ?? '').trim() || EMPTY_VALUE}`).join('\n\n')
 
 const firstLine = (text: string) => text.trim().split('\n')[0] ?? ''
+
+// 터미널에서 차지하는 칸 수: 한글 등 넓은 글자는 두 칸
+const cellWidth = (text: string) => [...text].reduce((n, ch) => n + (ch.charCodeAt(0) >= 0x1100 ? 2 : 1), 0)
+
+// 글꼴 폭이 제각각인 화면(데스크톱 앱, VS Code 계열)에서의 대략적 폭, em 단위
+const emWidth = (text: string) =>
+  [...text].reduce((n, ch) => {
+    const code = ch.charCodeAt(0)
+    if (ch === ' ' || ch === '·') return n + 0.3
+    if (code >= 0xac00 && code <= 0xd7a3) return n + 1
+    if (code < 0x80) return n + 0.55
+    return n + 0.8
+  }, 0)
+
+// 접힌 줄 버튼이 bodyColumns 폭(틀 안쪽 insetColumns 제외)을 채우도록 붙일 en space 개수
+// 비율은 Antigravity 실측(띠 한 칸 ≈ 0.74em, en space = 0.5em, 버튼 안쪽 여백 ≈ 1.4em)에 맞췄고,
+// 넘쳐서 두 줄로 꺾이지 않게 5% 덜 채운다
+function fillerCount(surface: string, bodyColumns: number, insetColumns: number, label: string) {
+  if (surface === 'terminal') return Math.max(0, bodyColumns - insetColumns - 4 - cellWidth(label))
+  const COLUMN_EM = 0.74
+  const BUTTON_CHROME_EM = 1.4
+  const EN_SPACE_EM = 0.5
+  const free = (bodyColumns - insetColumns) * COLUMN_EM - BUTTON_CHROME_EM - emWidth(label)
+  return Math.max(0, Math.floor((free * 0.95) / EN_SPACE_EM))
+}
 
 const stamp = (ms: number) => {
   const d = new Date(ms)
@@ -83,11 +108,11 @@ async function loadTemplates($: EngineInterface) {
   await saveTemplates($, [...DEFAULT_TEMPLATES, ...custom])
 }
 
-// 새 대화는 항상 펼친 작성 화면, 1번 칸부터
+// 새 대화는 항상 접힌 줄, 펼치면 1번 칸부터
 async function resetForNewChat($: EngineInterface) {
   await resetDraft($)
   await update($, mode, () => 'fill' as Mode)
-  await update($, isOpen, () => true)
+  await update($, isOpen, () => false)
   // 화면이 이 mod가 준비되기 전에 띠를 물어 "없음"을 기억했을 수 있어 다시 그리게 한다
   $.ui.invalidate('ui.render')
 }
@@ -239,17 +264,27 @@ export const register: Register = on => {
     const at = Math.min(await read($, step), count - 1)
     const room = Math.max(10, e.props.bodyColumns - 6)
 
-    // 접힌 상태: 입력창 위 한 줄. 글자 뒤를 빈칸으로 채워 바 전체가 눌리게 한다
+    // 데스크톱 앱은 테두리 하나로 감싸고, VS Code 계열은 입력칸이 이미 틀을 가져서 바깥 테두리를 빼 균형을 맞춘다
+    // 접힌 줄과 펼친 화면이 같은 틀을 써서 두 상태의 폭이 늘 같다
+    const isVscode = e.surface === 'vscode'
+    const frame = isVscode
+      ? ({ paddingX: 1 } as const)
+      : ({ borderStyle: 'round', borderDimColor: true, paddingX: 1 } as const)
+    // 틀이 안쪽에서 차지하는 칸: 좌우 여백, 테두리
+    const frameInset = isVscode ? 2 : 4
+
+    // 접힌 상태: 펼친 템플릿과 같은 틀 안의 한 줄 버튼
+    // 버튼은 스스로 늘어나지 않으므로, 그릴 때마다 지금 띠 폭(bodyColumns)에 맞춰 길이를 정한다.
+    // 창 크기가 바뀌면 엔진이 다시 그리므로 폭을 따라간다.
+    // 일반 빈칸은 화면에서 하나로 줄어들어 폭이 있는 공백(en space)으로 채운다
     if (!(await read($, isOpen))) {
       const written = values.filter(v => v.trim()).length
       const label = `▲  템플릿 · ${tpl.name}${written > 0 ? ` · ${written}/${count} 작성 중` : ''}`
+      const fill = fillerCount(e.surface, e.props.bodyColumns, frameInset, label)
       return (
-        <Button
-          key="expand"
-          hotkey="t"
-          label={label.padEnd(Math.max(label.length, e.props.bodyColumns - 2), ' ')}
-          onPress={() => expand($)}
-        />
+        <Box flexDirection="column" {...frame}>
+          <Button key="expand" hotkey="t" label={label + '\u2002'.repeat(fill)} onPress={() => expand($)} />
+        </Box>
       )
     }
 
@@ -454,12 +489,6 @@ export const register: Register = on => {
     const chosen = values[at] ?? ''
 
     const preselect = Math.max(0, options.indexOf(chosen))
-
-    // 데스크톱 앱은 테두리 하나로 감싸고, VS Code 계열은 입력칸이 이미 틀을 가져서 바깥 테두리를 빼 균형을 맞춘다
-    const frame =
-      e.surface === 'vscode'
-        ? ({ paddingX: 1 } as const)
-        : ({ borderStyle: 'round', borderDimColor: true, paddingX: 1 } as const)
 
     // 입력 바 모양: 작성한 칸이 위에 쌓이고, 제목 줄, 입력 영역, 도구 줄
     // 폭은 고정하지 않고(가로 스크롤 방지) 빈 Box가 남는 공간을 채운다

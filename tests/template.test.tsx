@@ -8,6 +8,7 @@ const BAND = {
   requestId: 'band',
   props: {
     hasSurvey: false,
+    isCollapsed: false,
     isWorking: false,
     maxRows: 40,
     bodyColumns: 100,
@@ -57,6 +58,13 @@ const position = async (ui: Ui) =>
   (await ui.find({ type: 'Text', text: / · \d+\/\d+$/ }))?.text.split(' · ').pop() ?? ''
 const selected = async (ui: Ui) => (await ui.find({ key: 'tpl-select' }))?.props.value
 
+// 새 대화는 접힌 줄로 시작하므로, 줄을 눌러 펼친 화면을 돌려준다
+async function openBand($: Engine, surface: 'desktop' | 'vscode' | 'terminal') {
+  const ui = await $.ui.mount({ ...BAND, surface })
+  if (await ui.find({ key: 'expand' })) await $.ui.press({ plugin: P, key: 'expand', surface })
+  return ui
+}
+
 test('문제 해결 9칸: 빈칸은 없음, 버튼칸은 골라 넘기고, 끝나면 채운 뒤 1번 칸으로 남는다', async ($, on) => {
   engineBeneath(on)
   const filled = captureFill(on)
@@ -65,7 +73,7 @@ test('문제 해결 9칸: 빈칸은 없음, 버튼칸은 골라 넘기고, 끝�
 
   for (const surface of ['desktop', 'vscode', 'terminal'] as const) {
     filled.text = ''
-    const ui = await $.ui.mount({ ...BAND, surface })
+    const ui = await openBand($, surface)
 
     expect(await selected(ui)).toBe('problem')
     expect(await position(ui)).toBe('1/9')
@@ -109,7 +117,7 @@ test('템플릿 이름을 누르면 목록에서 고른다', async ($, on) => {
   engineBeneath(on)
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const ui = await openBand($, 'desktop')
 
   const options = (await ui.find({ key: 'tpl-select' }))?.props.options as { value: string; label: string }[]
   expect(options.map(o => o.label)).toEqual(['문제 해결', '아이디어 기획', '문서 제작', '정보·공부 수집', '+ 새 템플릿 만들기'])
@@ -125,7 +133,7 @@ test('목록의 "새 템플릿 만들기"로 버튼칸이 있는 템플릿을 �
   const filled = captureFill(on)
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const ui = await openBand($, 'desktop')
 
   // 편집 칸의 key에는 템플릿 id가 들어가므로 보이는 글자로 찾는다
   const keyOf = async (text: string) => (await ui.find({ type: 'Input', text }))?.key ?? ''
@@ -151,7 +159,7 @@ test('/pt를 여러 번 입력해도 사라지지 않고, [접기]로만 접힌�
   engineBeneath(on)
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const ui = await openBand($, 'desktop')
   await $.ui.input({ plugin: P, key: 'step-0', text: '쓰는 중', kind: 'change' })
 
   await runCommand($, 'pt')
@@ -165,18 +173,64 @@ test('/pt를 여러 번 입력해도 사라지지 않고, [접기]로만 접힌�
   await ui.unmount()
 })
 
-test('대화를 새로 시작(/clear)하면 접혀 있던 템플릿이 다시 펼쳐지고, ↑로 넘긴다', async ($, on) => {
+test('새 대화는 접힌 줄로 시작하고, 줄 전체가 버튼이라 누르면 펼쳐진다', async ($, on) => {
+  engineBeneath(on)
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  for (const surface of ['desktop', 'vscode', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect(await ui.find({ key: 'step-0' })).toBeUndefined()
+
+    const bar = await ui.find({ key: 'expand' })
+    const label = String(bar?.props.label)
+    expect(label.startsWith('▲  템플릿 · 문제 해결')).toBe(true)
+    // 줄어들지 않는 공백으로 띠 폭(100칸)에 가깝게 채운다
+    expect(label.endsWith(' ')).toBe(true)
+    // 띠 폭(100칸)을 따라 글자 뒤가 넉넉히 채워진다
+    expect(label.length).toBeGreaterThan(70)
+
+    await $.ui.press({ plugin: P, key: 'expand', surface })
+    expect(await ui.find({ key: 'step-0' })).toBeDefined()
+    await $.ui.press({ plugin: P, key: 'close', surface })
+    await ui.unmount()
+  }
+})
+
+test('접힌 줄 버튼 길이는 고정이 아니라 띠 폭을 따라간다', async ($, on) => {
+  engineBeneath(on)
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const lengthAt = async (bodyColumns: number, surface: 'desktop' | 'vscode' | 'terminal') => {
+    const ui = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, bodyColumns } })
+    const label = String((await ui.find({ key: 'expand' }))?.props.label)
+    await ui.unmount()
+    return label.length
+  }
+
+  // 터미널: 폭이 60칸 늘면 버튼도 정확히 60칸
+  expect((await lengthAt(120, 'terminal')) - (await lengthAt(60, 'terminal'))).toBe(60)
+  // 글꼴 폭이 제각각인 화면: 한 칸(0.74em)이 en space(0.5em) 약 1.4개라 그 비율로 늘어난다
+  for (const surface of ['desktop', 'vscode'] as const) {
+    const grown = (await lengthAt(120, surface)) - (await lengthAt(60, surface))
+    expect(grown).toBeGreaterThan(80)
+    expect(grown).toBeLessThan(88)
+  }
+  // VS Code는 바깥 테두리가 없어 같은 폭에서 조금 더 길다
+  expect(await lengthAt(100, 'vscode')).toBeGreaterThan(await lengthAt(100, 'desktop'))})
+
+test('대화를 새로 시작(/clear)하면 쓰던 내용을 비우고 접힌 줄로 돌아간다', async ($, on) => {
   engineBeneath(on)
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
 
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
-  const ui = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const ui = await openBand($, 'vscode')
   await $.ui.input({ plugin: P, key: 'step-0', text: '쓰던 것', kind: 'change' })
-  await $.ui.press({ plugin: P, key: 'close' })
-  expect(await ui.find({ key: 'expand' })).toBeDefined()
 
   await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
-  expect(await ui.find({ key: 'expand' })).toBeUndefined()
+  expect(await ui.find({ key: 'step-0' })).toBeUndefined()
+  expect((await ui.find({ key: 'expand' }))?.text).not.toContain('작성 중')
+
+  await $.ui.press({ plugin: P, key: 'expand' })
   expect((await ui.find({ key: 'step-0' }))?.props.value).toBe('')
   expect(await ui.find({ type: 'Text', text: '문제 정의' })).toBeDefined()
 
@@ -190,7 +244,7 @@ test('작성한 칸은 위에 내용과 함께 쌓이고, 누르면 그 칸으�
   engineBeneath(on)
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const ui = await openBand($, 'desktop')
   await $.ui.input({ plugin: P, key: 'step-0', text: '버튼이 겹침' })
   await $.ui.input({ plugin: P, key: 'step-1', text: '' })
 
@@ -208,7 +262,7 @@ test('앞 칸을 눌러 고치고 Enter하면 쓰던 칸으로 바로 돌아온�
   engineBeneath(on)
 
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
-  const ui = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const ui = await openBand($, 'vscode')
   for (const [i, text] of [[0, '첫 내용'], [1, ''], [2, '셋째'], [3, '넷째']] as const) {
     await $.ui.input({ plugin: P, key: `step-${i}`, text })
   }
@@ -228,7 +282,7 @@ test('접힌 줄을 누르면 펼쳐진다', async ($, on) => {
   engineBeneath(on)
 
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
-  const ui = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const ui = await openBand($, 'vscode')
   await $.ui.press({ plugin: P, key: 'close' })
   expect(await ui.find({ key: 'step-0' })).toBeUndefined()
   await $.ui.press({ plugin: P, key: 'expand' })
@@ -244,7 +298,7 @@ test('작성·버튼칸·편집·기록·접힌 줄 화면이 데스크톱·VS C
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   for (const surface of ['desktop', 'vscode', 'terminal'] as const) {
-    const ui = await $.ui.mount({ ...BAND, surface })
+    const ui = await openBand($, surface)
     expect(await ui.find({ key: 'step-0' })).toBeDefined()
 
     for (const i of [0, 1, 2, 3, 4]) await $.ui.input({ plugin: P, key: `step-${i}`, text: `값${i}`, surface })
@@ -291,7 +345,7 @@ test('앞 버전의 10칸 기본 템플릿은 새 구성으로 바뀌고, 직접
   })
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const ui = await openBand($, 'desktop')
   expect(await position(ui)).toBe('1/9')
   const options = (await ui.find({ key: 'tpl-select' }))?.props.options as { value: string }[]
   expect(options.map(o => o.value)).toEqual(['problem', 'idea', 'document', 'study', 't1', '__new__'])
